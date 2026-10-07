@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: meterline
+  datasource:
+    url: jdbc:postgresql://localhost:5432/meterline
+    username: meterline
+    password: meterline
+  flyway:
+    enabled: true
+
+server:
+  port: 8080
