@@ -8,6 +8,8 @@ Day 1 builds the correctness foundation: immutable raw usage ingestion with dete
 
 Day 2 adds a pure pricing engine for volume pricing, marginal tiered pricing, exact effective-dated rate boundaries, integer-cent totals, and property-based pricing tests.
 
+Day 3 adds billing periods, deterministic usage aggregation, invoice generation, rerunnable billing jobs, and explicit late-event adjustment lines.
+
 ## Day 1: Ingestion Foundation
 
 Implemented so far:
@@ -116,3 +118,18 @@ Implemented so far:
 - Precision test for 10 million events at `$0.0001/unit`.
 
 See [docs/day-2-pricing.md](docs/day-2-pricing.md) for pricing assumptions and rounding notes.
+
+## Day 3 Billing
+
+Implemented so far:
+
+- PostgreSQL billing tables for periods, aggregates, invoices, and invoice lines.
+- Deterministic IDs for billing periods, aggregates, invoices, usage lines, and adjustment lines.
+- Idempotent period billing that can be rerun after a partial failure without duplicating invoice lines.
+- Usage aggregation from immutable raw events by customer, meter, and billing period.
+- Invoice totals recomputed from invoice lines instead of incrementally mutated.
+- Explicit adjustment lines for events that arrive after their original period is closed.
+- Command-line billing runner with `billing:run <period-start> <period-end>`.
+- Integration tests for stable invoices, partial-state recovery, and late-event adjustments.
+
+See [docs/day-3-billing.md](docs/day-3-billing.md) for billing lifecycle, late-arrival, and crash-recovery notes.
