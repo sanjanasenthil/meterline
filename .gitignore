@@ -1,0 +1,5 @@
+target/
+.mvn/
+*.class
+*.log
+.DS_Store
