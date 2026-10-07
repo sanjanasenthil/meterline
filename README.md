@@ -10,6 +10,8 @@ Day 2 adds a pure pricing engine for volume pricing, marginal tiered pricing, ex
 
 Day 3 adds billing periods, deterministic usage aggregation, invoice generation, rerunnable billing jobs, and explicit late-event adjustment lines.
 
+Day 4 adds independent reconciliation from immutable raw events, Kafka ingestion/replay components, Docker packaging, local `kind` manifests, and benchmark/recovery runbooks.
+
 ## Day 1: Ingestion Foundation
 
 Implemented so far:
@@ -133,3 +135,17 @@ Implemented so far:
 - Integration tests for stable invoices, partial-state recovery, and late-event adjustments.
 
 See [docs/day-3-billing.md](docs/day-3-billing.md) for billing lifecycle, late-arrival, and crash-recovery notes.
+
+## Day 4 Reconciliation, Kafka, And Kubernetes
+
+Implemented so far:
+
+- Independent reconciliation module that recomputes expected invoice amounts from `raw_usage_events`.
+- Machine-readable and human-readable reconciliation reports.
+- One-cent corruption detection for issued invoices.
+- Command-line reconciliation runner with `reconcile:run <period-start> <period-end> [--json]`.
+- Kafka producer, consumer, topic configuration, and replay service using the same idempotent raw event writer.
+- Dockerfile, Docker Compose runtime, and local `kind` manifests.
+- Benchmark and pod-recovery runbooks with placeholders for measured results.
+
+See [docs/day-4-reconciliation-kafka-k8s.md](docs/day-4-reconciliation-kafka-k8s.md) and [docs/day-4-benchmark.md](docs/day-4-benchmark.md).
