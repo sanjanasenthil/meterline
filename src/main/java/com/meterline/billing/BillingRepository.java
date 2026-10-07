@@ -315,6 +315,34 @@ public class BillingRepository {
         namedJdbcTemplate.update(sql, new MapSqlParameterSource("invoiceId", invoiceId));
     }
 
+    public int issueInvoices(BillingPeriod period) {
+        String sql = """
+                UPDATE invoices
+                SET status = 'ISSUED',
+                    updated_at = now()
+                WHERE period_start = :periodStart
+                  AND period_end = :periodEnd
+                """;
+        return namedJdbcTemplate.update(sql, periodParameters(period));
+    }
+
+    public int corruptFirstInvoiceLine(BillingPeriod period, long deltaCents) {
+        String sql = """
+                UPDATE invoice_lines
+                SET amount_cents = amount_cents + :deltaCents,
+                    updated_at = now()
+                WHERE line_id = (
+                    SELECT line_id
+                    FROM invoice_lines
+                    WHERE period_start = :periodStart
+                      AND period_end = :periodEnd
+                    ORDER BY line_id
+                    LIMIT 1
+                )
+                """;
+        return namedJdbcTemplate.update(sql, periodParameters(period).addValue("deltaCents", deltaCents));
+    }
+
     public Optional<InvoiceView> findInvoice(String invoiceId) {
         String invoiceSql = """
                 SELECT invoice_id, customer_id, total_cents
