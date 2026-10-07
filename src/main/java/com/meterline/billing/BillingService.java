@@ -63,6 +63,16 @@ public class BillingService {
         billingRepository.closePeriod(period);
     }
 
+    @Transactional
+    public int issueInvoices(BillingPeriod period) {
+        return billingRepository.issueInvoices(period);
+    }
+
+    @Transactional
+    public int corruptFirstInvoiceLineForTest(BillingPeriod period, long deltaCents) {
+        return billingRepository.corruptFirstInvoiceLine(period, deltaCents);
+    }
+
     public List<InvoiceView> invoicesFor(BillingPeriod period) {
         return billingRepository.invoicesFor(period);
     }
