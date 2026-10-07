@@ -6,6 +6,8 @@ Meterline is a usage metering and billing engine. Its core invariant is:
 
 Day 1 builds the correctness foundation: immutable raw usage ingestion with deterministic event IDs and database-enforced deduplication.
 
+Day 2 adds a pure pricing engine for volume pricing, marginal tiered pricing, exact effective-dated rate boundaries, integer-cent totals, and property-based pricing tests.
+
 ## Day 1: Ingestion Foundation
 
 Implemented so far:
@@ -98,3 +100,19 @@ mvn test
 ```
 
 The PostgreSQL integration tests use Testcontainers and require Docker. If Docker is unavailable, those tests are skipped rather than silently replaced with a mock database.
+
+## Day 2 Pricing Engine
+
+Implemented so far:
+
+- Pure pricing module with no Spring, database, clock, HTTP, or randomness dependency.
+- Volume pricing.
+- Marginal tiered pricing.
+- Effective-dated rate changes split at exact timestamps.
+- Integer-cent `Money` outputs.
+- Rates represented as millionths of a cent per unit.
+- Explicit `HALF_UP` line-level rounding policy.
+- jqwik property tests for monotonicity, tier continuity, period split additivity, and determinism.
+- Precision test for 10 million events at `$0.0001/unit`.
+
+See [docs/day-2-pricing.md](docs/day-2-pricing.md) for pricing assumptions and rounding notes.
