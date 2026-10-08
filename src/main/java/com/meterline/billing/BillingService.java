@@ -6,6 +6,8 @@ import com.meterline.pricing.PricedLine;
 import com.meterline.pricing.PricingEngine;
 import com.meterline.pricing.PricingPlan;
 import com.meterline.pricing.UsageWindow;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,15 +22,19 @@ public class BillingService {
     private final BillingRepository billingRepository;
     private final BillingPlanCatalog billingPlanCatalog;
     private final PricingEngine pricingEngine;
+    private final MeterRegistry meterRegistry;
 
-    public BillingService(BillingRepository billingRepository, BillingPlanCatalog billingPlanCatalog) {
+    public BillingService(BillingRepository billingRepository, BillingPlanCatalog billingPlanCatalog, MeterRegistry meterRegistry) {
         this.billingRepository = billingRepository;
         this.billingPlanCatalog = billingPlanCatalog;
         this.pricingEngine = new PricingEngine();
+        this.meterRegistry = meterRegistry;
     }
 
     @Transactional
     public BillingRunResult runBilling(BillingPeriod period) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        try {
         billingRepository.ensureOpenPeriod(period);
         int aggregatesWritten = billingRepository.aggregateUsage(period);
         List<UsageAggregate> aggregates = billingRepository.aggregatesFor(period);
@@ -50,12 +56,20 @@ public class BillingService {
 
         invoiceIds.forEach(billingRepository::refreshInvoiceTotal);
 
-        return new BillingRunResult(
+        BillingRunResult result = new BillingRunResult(
                 aggregatesWritten,
                 invoiceIds.size(),
                 usageLinesWritten,
                 adjustmentLinesWritten,
                 new ArrayList<>(invoiceIds));
+        meterRegistry.counter("meterline.billing.invoices.processed").increment(result.invoicesWritten());
+        return result;
+        } catch (RuntimeException exception) {
+            meterRegistry.counter("meterline.billing.errors").increment();
+            throw exception;
+        } finally {
+            sample.stop(meterRegistry.timer("meterline.billing.run.duration"));
+        }
     }
 
     @Transactional

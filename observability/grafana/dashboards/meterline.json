@@ -1,0 +1,21 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {"type":"timeseries","title":"Accepted usage events / minute","gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"expr":"sum by (instance) (increase(meterline_ingestion_events_inserted_total[1m]))","legendFormat":"inserted","refId":"A"}]},
+    {"type":"timeseries","title":"Duplicate events ignored / minute","gridPos":{"h":8,"w":12,"x":12,"y":0},"targets":[{"expr":"sum(increase(meterline_ingestion_events_duplicates_total[1m]))","legendFormat":"duplicates","refId":"A"}]},
+    {"type":"timeseries","title":"Billing run duration","gridPos":{"h":8,"w":12,"x":0,"y":8},"targets":[{"expr":"meterline_billing_run_duration_seconds_sum / clamp_min(meterline_billing_run_duration_seconds_count, 1)","legendFormat":"average seconds","refId":"A"}]},
+    {"type":"timeseries","title":"Invoices processed by billing","gridPos":{"h":8,"w":12,"x":12,"y":8},"targets":[{"expr":"sum(increase(meterline_billing_invoices_processed_total[1h]))","legendFormat":"invoice rows processed","refId":"A"}]},
+    {"type":"timeseries","title":"Reconciliation mismatches","gridPos":{"h":8,"w":12,"x":0,"y":16},"targets":[{"expr":"sum(increase(meterline_reconciliation_mismatches_total[5m]))","legendFormat":"mismatches","refId":"A"}]},
+    {"type":"timeseries","title":"Processing and workflow errors","gridPos":{"h":8,"w":12,"x":12,"y":16},"targets":[{"expr":"sum(increase(meterline_ingestion_failures_total[5m])) + sum(increase(meterline_billing_errors_total[5m])) + sum(increase(meterline_reconciliation_errors_total[5m]))","legendFormat":"errors / 5m","refId":"A"}]}
+  ],
+  "refresh":"15s",
+  "schemaVersion":39,
+  "tags":["meterline"],
+  "templating":{"list":[]},
+  "time":{"from":"now-1h","to":"now"},
+  "timezone":"browser",
+  "title":"Meterline Operations",
+  "uid":"meterline-ops",
+  "version":1
+}

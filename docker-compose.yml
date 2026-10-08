@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: meterline
       POSTGRES_USER: meterline
-      POSTGRES_PASSWORD: meterline
+      POSTGRES_PASSWORD: ${METERLINE_POSTGRES_PASSWORD:?Set METERLINE_POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     healthcheck:
@@ -37,8 +37,29 @@ services:
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/meterline
       SPRING_DATASOURCE_USERNAME: meterline
-      SPRING_DATASOURCE_PASSWORD: meterline
+      SPRING_DATASOURCE_PASSWORD: ${METERLINE_POSTGRES_PASSWORD:?Set METERLINE_POSTGRES_PASSWORD}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       METERLINE_KAFKA_ENABLED: "true"
     ports:
       - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    depends_on:
+      - app
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD}
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro

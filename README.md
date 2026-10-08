@@ -1,151 +1,91 @@
 # Meterline
 
-Meterline is a usage metering and billing engine. Its core invariant is:
+Usage billing errors are often invisible: a dropped, duplicated, late, or mispriced event can produce a plausible invoice. Meterline keeps immutable raw usage as its source of truth, writes invoices idempotently, and independently recomputes issued invoice totals for reconciliation. Operators can trace an invoice line back to the raw events and inspect the applied rate.
 
-> Every usage event that enters the system appears in exactly one invoice line, at the correct price, exactly once.
+> Every billable event is represented once in an invoice line at the configured price; invoices are checked against raw events to the cent.
 
-Day 1 builds the correctness foundation: immutable raw usage ingestion with deterministic event IDs and database-enforced deduplication.
+## Proof And Current Evidence
 
-Day 2 adds a pure pricing engine for volume pricing, marginal tiered pricing, exact effective-dated rate boundaries, integer-cent totals, and property-based pricing tests.
+- Reconciliation reads `raw_usage_events` directly and detects a deliberately changed invoice line.
+- Invoice retrieval includes status, period, total cents, and lines. Line drill-down returns source events, adjustment references, rate, and quantity/amount checks.
+- Pricing tests cover exact effective-rate boundaries, marginal tier crossings, and an aggregate of 10 million units at `$0.0001` with zero cent-level drift.
+- Current execution evidence and runtime limits are in [docs/final-test-summary.md](docs/final-test-summary.md). Docker-gated results and full-scale runtime measurements are reported separately.
 
-Day 3 adds billing periods, deterministic usage aggregation, invoice generation, rerunnable billing jobs, and explicit late-event adjustment lines.
+## Architecture
 
-Day 4 adds independent reconciliation from immutable raw events, Kafka ingestion/replay components, Docker packaging, local `kind` manifests, and benchmark/recovery runbooks.
+```text
+REST / Kafka -> validate + deterministic ID -> PostgreSQL immutable raw events
+                                      |                 |
+                                      v                 v
+                             aggregation + pricing   independent reconciliation
+                                      |                 |
+                                      v                 v
+                         invoices and source links <- invoice line drill-down
+```
 
-## Day 1: Ingestion Foundation
+This is one Spring Boot service with module boundaries. PostgreSQL enforces event uniqueness; billing uses stable IDs and upserts; reconciliation recalculates from raw events. See [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md).
 
-Implemented so far:
+## Run Locally
 
-- Java 21 Spring Boot backend.
-- PostgreSQL-backed raw usage event store.
-- Flyway migration for `raw_usage_events`.
-- REST ingestion endpoint at `POST /api/events`.
-- Deterministic event IDs derived from stable business action fields.
-- PostgreSQL `PRIMARY KEY` and unique business-action index for deduplication.
-- Append-only event model.
-- Explicit adjustment records instead of historical edits.
-- Synthetic seven-day event generator with known totals.
-- Testcontainers tests for real PostgreSQL behavior.
+Requirements: Java 21, Maven, and Docker Compose.
 
-## Event Schema
-
-Raw usage events include:
-
-- `event_id`
-- `customer_id`
-- `meter_id`
-- `source`
-- `source_event_key`
-- `quantity_units`
-- `event_timestamp`
-- `received_at`
-- `event_type`
-- `adjustment_for_event_id`
-- `metadata`
-
-`event_id` is deterministic and is generated from:
-
-- customer
-- meter
-- source
-- source event key
-- event timestamp
-- event type
-- adjustment target, when present
-
-The database enforces uniqueness. Duplicate delivery is safe because inserting the same event again uses `ON CONFLICT DO NOTHING`.
-
-## Running Locally
-
-Start PostgreSQL with a database named `meterline`, user `meterline`, and password `meterline`, then run:
+Set local-only passwords in your shell before starting the stack:
 
 ```bash
+export METERLINE_POSTGRES_PASSWORD='<choose-a-local-password>'
+export GRAFANA_ADMIN_PASSWORD='<choose-a-local-password>'
+```
+
+```bash
+docker compose up --build
+```
+
+The API is at `http://localhost:8080`, Prometheus at `http://localhost:9090`, and Grafana at `http://localhost:3000` (user `admin`, password from `GRAFANA_ADMIN_PASSWORD`). Open the provisioned **Meterline Operations** dashboard. Metrics are also available at `/actuator/prometheus`.
+
+To run the app through Maven, start PostgreSQL separately and use:
+
+```bash
+export METERLINE_POSTGRES_PASSWORD='<your-local-postgres-password>'
 mvn spring-boot:run
 ```
 
-## Ingesting An Event
+## Ingest And Trace
 
 ```bash
 curl -i -X POST http://localhost:8080/api/events \
   -H 'Content-Type: application/json' \
-  -d '{
-    "customerId": "cust-1",
-    "meterId": "api-calls",
-    "source": "demo",
-    "sourceEventKey": "request-123",
-    "quantityUnits": 42,
-    "eventTimestamp": "2026-01-01T00:00:00Z",
-    "eventType": "USAGE",
-    "metadata": {
-      "path": "/v1/messages"
-    }
-  }'
+  -d '{"customerId":"cust-1","meterId":"api-calls","source":"demo","sourceEventKey":"request-123","quantityUnits":42,"eventTimestamp":"2026-01-01T00:00:00Z","eventType":"USAGE","metadata":{"path":"/v1/messages"}}'
 ```
 
-The first request returns `201 Created` with status `inserted`. Repeating the same request returns `200 OK` with status `duplicate_ignored`.
+Run a billing period, then retrieve an invoice and inspect one line:
 
-## Day 1 Correctness Proof
+```bash
+mvn spring-boot:run --args="billing:run 2026-01-01T00:00:00Z 2026-02-01T00:00:00Z"
+mvn spring-boot:run --args="billing:issue 2026-01-01T00:00:00Z 2026-02-01T00:00:00Z"
+curl http://localhost:8080/api/invoices/<invoice-id>
+curl http://localhost:8080/api/invoice-lines/<line-id>/drilldown
+```
 
-The Day 1 tests cover:
+The line response includes source events, `returnedEventQuantityUnits`, `amountAtAppliedRateCents`, `quantityMatches`, and `amountMatches`. Adjustment lines are marked separately and reference their source event. A `false` result is an audit discrepancy to investigate.
 
-- valid event ingestion
-- malformed event rejection
-- deterministic ID generation
-- duplicate submission
-- concurrent duplicate submission
-- seven-day backfill replay safety
-- adjustment records as new rows
-- raw event immutability by absence of update behavior
+Issue the period before reconciliation. Reconcile it and request JSON:
 
-Run tests with:
+```bash
+mvn spring-boot:run --args="reconcile:run 2026-01-01T00:00:00Z 2026-02-01T00:00:00Z --json"
+```
+
+Examples: [reconciliation report](docs/reconciliation-report-example.md), [line drill-down](docs/drilldown-example.md).
+
+## Tests And Runtime
 
 ```bash
 mvn test
 ```
 
-The PostgreSQL integration tests use Testcontainers and require Docker. If Docker is unavailable, those tests are skipped rather than silently replaced with a mock database.
+PostgreSQL and Kafka integration tests use Testcontainers and require Docker; they are skipped when Docker is unavailable. Pricing property and pure unit tests run without Docker. Local Kubernetes instructions are in [k8s/README.md](k8s/README.md); benchmark commands and actual measurement status are in [docs/day-4-benchmark.md](docs/day-4-benchmark.md).
 
-## Day 2 Pricing Engine
+## Scope
 
-Implemented so far:
+The project uses one event schema and one currency. Pricing supports volume and marginal tiered models; the current billing catalog supplies a default volume plan. There are no taxes, dunning, payment provider integration, React dashboard, or microservices. Kafka lag is not instrumented. See the architecture document for implementation limits and technology choices.
 
-- Pure pricing module with no Spring, database, clock, HTTP, or randomness dependency.
-- Volume pricing.
-- Marginal tiered pricing.
-- Effective-dated rate changes split at exact timestamps.
-- Integer-cent `Money` outputs.
-- Rates represented as millionths of a cent per unit.
-- Explicit `HALF_UP` line-level rounding policy.
-- jqwik property tests for monotonicity, tier continuity, period split additivity, and determinism.
-- Precision test for 10 million events at `$0.0001/unit`.
-
-See [docs/day-2-pricing.md](docs/day-2-pricing.md) for pricing assumptions and rounding notes.
-
-## Day 3 Billing
-
-Implemented so far:
-
-- PostgreSQL billing tables for periods, aggregates, invoices, and invoice lines.
-- Deterministic IDs for billing periods, aggregates, invoices, usage lines, and adjustment lines.
-- Idempotent period billing that can be rerun after a partial failure without duplicating invoice lines.
-- Usage aggregation from immutable raw events by customer, meter, and billing period.
-- Invoice totals recomputed from invoice lines instead of incrementally mutated.
-- Explicit adjustment lines for events that arrive after their original period is closed.
-- Command-line billing runner with `billing:run <period-start> <period-end>`.
-- Integration tests for stable invoices, partial-state recovery, and late-event adjustments.
-
-See [docs/day-3-billing.md](docs/day-3-billing.md) for billing lifecycle, late-arrival, and crash-recovery notes.
-
-## Day 4 Reconciliation, Kafka, And Kubernetes
-
-Implemented so far:
-
-- Independent reconciliation module that recomputes expected invoice amounts from `raw_usage_events`.
-- Machine-readable and human-readable reconciliation reports.
-- One-cent corruption detection for issued invoices.
-- Command-line reconciliation runner with `reconcile:run <period-start> <period-end> [--json]`.
-- Kafka producer, consumer, topic configuration, and replay service using the same idempotent raw event writer.
-- Dockerfile, Docker Compose runtime, and local `kind` manifests.
-- Benchmark and pod-recovery runbooks with placeholders for measured results.
-
-See [docs/day-4-reconciliation-kafka-k8s.md](docs/day-4-reconciliation-kafka-k8s.md) and [docs/day-4-benchmark.md](docs/day-4-benchmark.md).
+Portfolio notes: [verified resume bullets](docs/resume-bullets.md), [interview guide](docs/interview-guide.md), [outreach message](docs/outreach-message.md).

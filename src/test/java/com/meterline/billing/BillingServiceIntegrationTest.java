@@ -3,6 +3,8 @@ package com.meterline.billing;
 import com.meterline.events.EventType;
 import com.meterline.events.UsageEventRequest;
 import com.meterline.events.UsageEventService;
+import com.meterline.drilldown.DrillDownRepository;
+import com.meterline.drilldown.InvoiceLineDrillDown;
 import com.meterline.pricing.BillingPeriod;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +49,9 @@ class BillingServiceIntegrationTest {
 
     @Autowired
     JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    DrillDownRepository drillDownRepository;
 
     @Test
     void billingRunIsIdempotentAndProducesStableInvoices() {
@@ -111,7 +116,44 @@ class BillingServiceIntegrationTest {
             assertThat(line.lineType()).isEqualTo(InvoiceLineType.ADJUSTMENT);
             assertThat(line.adjustmentForEventId()).isEqualTo("evt_day3_late");
             assertThat(line.amountCents()).isEqualTo(42);
+            InvoiceLineDrillDown drillDown = drillDownRepository.line(line.lineId())
+                    .map(detail -> new InvoiceLineDrillDown(detail, drillDownRepository.eventsFor(detail),
+                            drillDownRepository.eventsFor(detail).stream().mapToLong(event -> event.quantityUnits()).sum(),
+                            InvoiceLineDrillDown.amountFor(detail.quantityUnits(), detail.rateMillionthsOfCent()),
+                            true, true))
+                    .orElseThrow();
+            assertThat(drillDown.line().adjustment()).isTrue();
+            assertThat(drillDown.events()).singleElement().satisfies(event -> {
+                assertThat(event.eventId()).isEqualTo("evt_day3_late");
+                assertThat(event.quantityUnits()).isEqualTo(42);
+            });
+            assertThat(drillDown.amountAtAppliedRateCents()).isEqualTo(42);
         });
+    }
+
+    @Test
+    void invoiceDrillDownReturnsSourceEventsAndAppliedRateProof() {
+        BillingPeriod period = january();
+        ingestUsage("day5-drill-1", 35, period.startInclusive().plus(1, ChronoUnit.HOURS));
+        ingestUsage("day5-drill-2", 65, period.startInclusive().plus(2, ChronoUnit.HOURS));
+        billingService.runBilling(period);
+        InvoiceView invoice = billingService.invoicesFor(period).getFirst();
+
+        var detail = drillDownRepository.invoice(invoice.invoiceId()).orElseThrow();
+        var line = detail.lines().getFirst();
+        var events = drillDownRepository.eventsFor(line);
+
+        assertThat(detail.customerId()).isEqualTo("cust-day3");
+        assertThat(detail.totalCents()).isEqualTo(100);
+        assertThat(detail.status()).isEqualTo("DRAFT");
+        assertThat(events).hasSize(2);
+        assertThat(events).extracting(event -> event.sourceEventKey())
+                .containsExactlyInAnyOrder("day5-drill-1", "day5-drill-2");
+        assertThat(events.stream().mapToLong(event -> event.quantityUnits()).sum()).isEqualTo(line.quantityUnits());
+        assertThat(InvoiceLineDrillDown.amountFor(line.quantityUnits(), line.rateMillionthsOfCent()))
+                .isEqualTo(line.amountCents());
+        assertThat(line.pricingModel()).isEqualTo("volume");
+        assertThat(line.adjustment()).isFalse();
     }
 
     private void ingestUsage(String sourceEventKey, long quantity, Instant eventTimestamp) {

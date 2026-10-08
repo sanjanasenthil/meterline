@@ -4,7 +4,7 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/meterline
     username: meterline
-    password: meterline
+    password: ${METERLINE_POSTGRES_PASSWORD:}
   flyway:
     enabled: true
   kafka:
@@ -23,6 +23,16 @@ spring:
 
 server:
   port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
 
 meterline:
   kafka:

@@ -7,6 +7,8 @@ import com.meterline.pricing.PricedLine;
 import com.meterline.pricing.PricingEngine;
 import com.meterline.pricing.PricingPlan;
 import com.meterline.pricing.UsageWindow;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -21,14 +23,19 @@ public class ReconciliationService {
     private final ReconciliationRepository repository;
     private final BillingPlanCatalog billingPlanCatalog;
     private final PricingEngine pricingEngine;
+    private final MeterRegistry meterRegistry;
 
-    public ReconciliationService(ReconciliationRepository repository, BillingPlanCatalog billingPlanCatalog) {
+    public ReconciliationService(ReconciliationRepository repository, BillingPlanCatalog billingPlanCatalog, MeterRegistry meterRegistry) {
         this.repository = repository;
         this.billingPlanCatalog = billingPlanCatalog;
         this.pricingEngine = new PricingEngine();
+        this.meterRegistry = meterRegistry;
     }
 
     public ReconciliationReport reconcile(BillingPeriod period) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        meterRegistry.counter("meterline.reconciliation.runs").increment();
+        try {
         Map<LineKey, ExpectedLine> expectedLines = expectedLines(period);
         List<InvoiceHeaderForReconciliation> invoices = repository.issuedInvoicesFor(period);
         List<InvoiceLineForReconciliation> actualLines = repository.issuedInvoiceLinesFor(period);
@@ -116,7 +123,7 @@ public class ReconciliationService {
                 ? ReconciliationStatus.MATCH
                 : ReconciliationStatus.MISMATCH;
 
-        return new ReconciliationReport(
+        ReconciliationReport report = new ReconciliationReport(
                 period.startInclusive(),
                 period.endExclusive(),
                 status,
@@ -124,6 +131,16 @@ public class ReconciliationService {
                 actualInvoiceTotal,
                 differenceCents,
                 differences);
+        if (!report.matches()) {
+            meterRegistry.counter("meterline.reconciliation.mismatches").increment(differences.size());
+        }
+        return report;
+        } catch (RuntimeException exception) {
+            meterRegistry.counter("meterline.reconciliation.errors").increment();
+            throw exception;
+        } finally {
+            sample.stop(meterRegistry.timer("meterline.reconciliation.duration"));
+        }
     }
 
     public ReconciliationReport reconcileOrThrow(BillingPeriod period) {
