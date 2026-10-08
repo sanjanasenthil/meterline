@@ -1,6 +1,7 @@
 package com.meterline.billing;
 
 import com.meterline.pricing.BillingPeriod;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -22,6 +23,7 @@ public class BillingRepository {
     private final NamedParameterJdbcTemplate namedJdbcTemplate;
     private final Clock clock;
 
+    @Autowired
     public BillingRepository(JdbcTemplate jdbcTemplate, NamedParameterJdbcTemplate namedJdbcTemplate) {
         this(jdbcTemplate, namedJdbcTemplate, Clock.systemUTC());
     }

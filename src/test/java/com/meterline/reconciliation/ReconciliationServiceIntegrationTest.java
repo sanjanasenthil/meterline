@@ -15,6 +15,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
@@ -99,7 +100,7 @@ class ReconciliationServiceIntegrationTest {
                 SET quantity_units = 999999
                 WHERE period_start = ?
                   AND period_end = ?
-                """, period.startInclusive(), period.endExclusive());
+                """, Timestamp.from(period.startInclusive()), Timestamp.from(period.endExclusive()));
 
         ReconciliationReport report = reconciliationService.reconcile(period);
 

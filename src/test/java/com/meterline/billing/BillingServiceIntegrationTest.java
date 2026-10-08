@@ -96,7 +96,7 @@ class BillingServiceIntegrationTest {
                 now.minus(3, ChronoUnit.DAYS),
                 now.minus(2, ChronoUnit.DAYS));
         BillingPeriod nextPeriod = new BillingPeriod(
-                now.minus(1, ChronoUnit.HOURS),
+                now,
                 now.plus(1, ChronoUnit.DAYS));
 
         billingService.closePeriod(closedPeriod);
@@ -106,7 +106,7 @@ class BillingServiceIntegrationTest {
                 "api-calls",
                 42,
                 closedPeriod.startInclusive().plus(1, ChronoUnit.HOURS),
-                nextPeriod.startInclusive().plus(10, ChronoUnit.MINUTES));
+                now.plus(10, ChronoUnit.MINUTES));
 
         billingService.runBilling(nextPeriod);
         List<InvoiceView> invoices = billingService.invoicesFor(nextPeriod);
@@ -117,10 +117,14 @@ class BillingServiceIntegrationTest {
             assertThat(line.adjustmentForEventId()).isEqualTo("evt_day3_late");
             assertThat(line.amountCents()).isEqualTo(42);
             InvoiceLineDrillDown drillDown = drillDownRepository.line(line.lineId())
-                    .map(detail -> new InvoiceLineDrillDown(detail, drillDownRepository.eventsFor(detail),
-                            drillDownRepository.eventsFor(detail).stream().mapToLong(event -> event.quantityUnits()).sum(),
-                            InvoiceLineDrillDown.amountFor(detail.quantityUnits(), detail.rateMillionthsOfCent()),
-                            true, true))
+                    .map(detail -> {
+                        var events = drillDownRepository.eventsFor(detail);
+                        long sourceQuantity = events.stream().mapToLong(event -> event.quantityUnits()).sum();
+                        long sourceAmount = InvoiceLineDrillDown.amountFor(
+                                sourceQuantity, detail.rateMillionthsOfCent());
+                        return new InvoiceLineDrillDown(detail, events, sourceQuantity, sourceAmount,
+                                sourceQuantity == detail.quantityUnits(), sourceAmount == detail.amountCents());
+                    })
                     .orElseThrow();
             assertThat(drillDown.line().adjustment()).isTrue();
             assertThat(drillDown.events()).singleElement().satisfies(event -> {
@@ -133,9 +137,12 @@ class BillingServiceIntegrationTest {
 
     @Test
     void invoiceDrillDownReturnsSourceEventsAndAppliedRateProof() {
-        BillingPeriod period = january();
-        ingestUsage("day5-drill-1", 35, period.startInclusive().plus(1, ChronoUnit.HOURS));
-        ingestUsage("day5-drill-2", 65, period.startInclusive().plus(2, ChronoUnit.HOURS));
+        BillingPeriod period = new BillingPeriod(
+                Instant.parse("2026-09-01T00:00:00Z"), Instant.parse("2026-10-01T00:00:00Z"));
+        ingestUsage("cust-day5-drilldown", "day5-drill-1", 35,
+                period.startInclusive().plus(1, ChronoUnit.HOURS));
+        ingestUsage("cust-day5-drilldown", "day5-drill-2", 65,
+                period.startInclusive().plus(2, ChronoUnit.HOURS));
         billingService.runBilling(period);
         InvoiceView invoice = billingService.invoicesFor(period).getFirst();
 
@@ -143,7 +150,7 @@ class BillingServiceIntegrationTest {
         var line = detail.lines().getFirst();
         var events = drillDownRepository.eventsFor(line);
 
-        assertThat(detail.customerId()).isEqualTo("cust-day3");
+        assertThat(detail.customerId()).isEqualTo("cust-day5-drilldown");
         assertThat(detail.totalCents()).isEqualTo(100);
         assertThat(detail.status()).isEqualTo("DRAFT");
         assertThat(events).hasSize(2);
@@ -157,8 +164,12 @@ class BillingServiceIntegrationTest {
     }
 
     private void ingestUsage(String sourceEventKey, long quantity, Instant eventTimestamp) {
+        ingestUsage("cust-day3", sourceEventKey, quantity, eventTimestamp);
+    }
+
+    private void ingestUsage(String customerId, String sourceEventKey, long quantity, Instant eventTimestamp) {
         usageEventService.ingest(new UsageEventRequest(
-                "cust-day3",
+                customerId,
                 "api-calls",
                 "billing-test",
                 sourceEventKey,
