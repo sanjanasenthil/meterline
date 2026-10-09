@@ -1,104 +1,99 @@
-# Meterline Project Overview
+# Meterline: Project Overview
 
-## What Meterline Does
+## Summary
 
-Meterline is a usage metering and billing backend. It accepts usage events, deduplicates them, aggregates and prices usage, creates invoices, independently reconciles issued invoices against the original event log, and lets an operator trace an invoice line back to its source events.
+Meterline is a Java 21 usage metering and billing backend. It accepts usage events over REST or Kafka, prevents duplicate billing, aggregates and prices usage, creates invoices, independently reconciles issued invoices against immutable source events, and traces invoice lines back to those events.
 
-The project is built around one correctness rule: billable usage should be represented exactly once at the intended price, and the invoice should be explainable from immutable source records. Reconciliation is the independent check; drill-down is the evidence trail.
+The core correctness rule is that billable usage is represented once at the configured price and remains explainable from source records. PostgreSQL uniqueness provides ingestion idempotency, stable billing identifiers make reruns safe, reconciliation independently checks invoice accuracy, and drill-down exposes the evidence behind each line.
 
-## Work Completed Across The Five Days
+## Implemented Scope
 
-### Day 1: Event Ingestion
+### Day 1: Ingestion And Data Integrity
 
-- Java 21 and Spring Boot application with a REST ingestion API at `POST /api/events`.
-- PostgreSQL raw event storage, managed through Flyway migrations.
-- Deterministic event IDs and database-enforced uniqueness make repeat delivery harmless.
-- Raw event records are append-only. Corrections are represented as adjustment records.
-- Request validation and a synthetic seven-day batch generator support repeatable tests.
-- PostgreSQL integration tests cover valid/invalid ingestion, duplicate submissions, concurrent duplicates, backfill replay, and adjustments. These tests use Testcontainers and require Docker.
+- Java 21 and Spring Boot REST application with `POST /api/events`.
+- PostgreSQL raw event storage and Flyway schema migrations.
+- Deterministic event IDs backed by database uniqueness constraints.
+- Append-only raw events; corrections use adjustment events rather than edits.
+- Request validation and a synthetic seven-day batch generator.
+- PostgreSQL integration tests for valid and invalid events, duplicate and concurrent-duplicate ingestion, backfill replay, and adjustments.
 
 ### Day 2: Pricing
 
-- Pure pricing package with no Spring or database dependency.
-- Volume and marginal tiered pricing models.
+- Framework-independent pricing package with volume and marginal tiered models.
 - Effective-dated rates split at exact timestamps.
-- Final amounts use integer cents. Rates use millionths of a cent per unit. Fractional calculations use `BigDecimal` with explicit `HALF_UP` rounding.
-- Example and jqwik property tests cover determinism, monotonicity, tier transitions, time splits, and an aggregate of 10 million units at `$0.0001` with zero cent-level drift.
+- Integer cents for final money amounts, scaled rates in millionths of a cent, and `BigDecimal` arithmetic with explicit `HALF_UP` rounding.
+- Example and jqwik property coverage for determinism, monotonicity, tier transitions, time splits, and fractional-rate arithmetic.
+- A 10-million-unit arithmetic test at `$0.0001` per unit; this is not a 10-million-row database load test.
 
 ### Day 3: Aggregation And Invoicing
 
-- Billing periods, usage aggregates, invoices, and invoice lines are stored in PostgreSQL.
-- Stable IDs and upserts allow a billing period to be rerun without duplicating invoice lines or adding totals twice.
-- Invoice totals are recomputed from their lines.
-- Late usage for an open period is included there. Usage received after its original period is closed becomes an explicit adjustment line in the target period.
-- Billing commands include `billing:run` and `billing:issue`.
-- Integration coverage checks stable invoices, recovery after partial invoice-line state, and late-arrival adjustments.
+- PostgreSQL billing periods, usage aggregates, invoices, and invoice lines.
+- Stable IDs and upserts support repeatable billing without duplicating invoice lines or incrementing totals twice.
+- Invoice totals are recalculated from invoice lines.
+- Late events received before period closure are included normally. Events received after closure produce explicit adjustment lines in the target period.
+- Command-line jobs: `billing:run` and `billing:issue`.
+- Integration coverage for stable invoices, partial invoice-line recovery, and late-arrival adjustments.
 
-### Day 4: Independent Reconciliation And Runtime
+### Day 4: Reconciliation, Kafka, And Runtime Packaging
 
-- Reconciliation calculates expected billing from `raw_usage_events`; it does not trust stored aggregates.
-- Reports include expected and actual totals, differences, and mismatch details. The CLI command is `reconcile:run` and supports JSON output.
-- A test helper plants a one-cent invoice-line corruption so reconciliation can prove it detects the mismatch.
-- Kafka producer, consumer, and replay service use the same idempotent PostgreSQL writer. The delivery model is at-least-once.
-- Docker packaging, Docker Compose, and local `kind` manifests describe the app, PostgreSQL, and Kafka runtime.
-- A Kafka duplicate-replay benchmark is measured at 100,000 unique events; remaining unmeasured runtime checks are called out explicitly in the evidence documents.
+- Reconciliation recalculates expected amounts from `raw_usage_events`, independently of stored aggregates.
+- Reports include expected and actual totals, differences, and mismatch details; `reconcile:run` supports JSON output.
+- Integration coverage plants a one-cent invoice-line corruption and verifies that reconciliation detects and quantifies it.
+- Kafka producer, consumer, topic configuration, and replay path use the same idempotent PostgreSQL writer. Delivery is at-least-once; correctness does not depend on Kafka exactly-once mode.
+- Dockerfile, Docker Compose services, and local `kind` manifests are included.
 
-### Day 5: Drill-Down, Observability, And Portfolio Material
+### Day 5: Invoice Drill-Down And Observability
 
-- `GET /api/invoices/{invoiceId}` returns invoice identity, customer, period, status, total cents, creation time, and lines.
-- `GET /api/invoice-lines/{lineId}/drilldown` returns line details and source events with timestamps, quantities, source, event type, adjustment link, and metadata.
-- The drill-down response includes summed returned quantity and checks whether it matches the invoice line, plus an applied-rate amount calculation and amount check.
-- Adjustment lines are marked separately and trace to their exact referenced source event, including the late-arrival case.
-- Micrometer metrics cover inserted and duplicate events, ingestion failures, billing duration and errors, invoice rows processed, reconciliation runs, mismatches, duration, and errors.
-- Prometheus scrapes `/actuator/prometheus`. Docker Compose provisions Grafana with the **Meterline Operations** dashboard.
-- A command-line invoice issue runner and Day 5 integration test coverage were added.
-- The README now leads with the billing correctness problem, reconciliation, and event-level drill-down. Additional documents cover architecture and decisions, test status, benchmark limitations, report examples, drill-down examples, resume bullets, interview questions, and an outreach message.
+- `GET /api/invoices/{invoiceId}` returns invoice identity, customer, period, status, total, creation time, and lines.
+- `GET /api/invoice-lines/{lineId}/drilldown` returns line data and its source events, including timestamps, quantities, source, event type, adjustment references, and metadata.
+- Drill-down responses include summed source quantity, applied-rate amount, and quantity/amount consistency checks.
+- Adjustment lines are marked and trace to their referenced source event, including late-arrival adjustments.
+- Micrometer metrics cover ingestion inserts, duplicates and failures; billing duration, errors and processed invoices; and reconciliation runs, mismatches, duration and errors.
+- Prometheus scrapes `/actuator/prometheus`; Docker Compose provisions Grafana and the **Meterline Operations** dashboard.
+- Portfolio material includes architecture notes, reconciliation and drill-down examples, resume bullets, an interview guide, and an outreach message.
 
-## Architecture At A Glance
+## Architecture
 
 ```text
 REST API or Kafka
        |
        v
-validate request -> deterministic event ID -> PostgreSQL uniqueness check
-                                             |
-                                             v
-                                  immutable raw usage events
-                                             |
-                        +--------------------+--------------------+
-                        |                                         |
-                        v                                         v
-              aggregate and price                         reconcile independently
-                        |                              from immutable raw events
-                        v                                         |
-                 invoice and lines <------------------------------+
-                        |
-                        v
-          invoice -> line -> source event drill-down
+validate -> deterministic event ID -> PostgreSQL uniqueness check
+                                      |
+                                      v
+                             immutable raw events
+                               /           \
+                              v             v
+                     aggregate + price   reconcile from raw events
+                              |             |
+                              v             v
+                         invoice lines <- compare issued totals
+                              |
+                              v
+                    line -> source-event drill-down
 
 Actuator metrics -> Prometheus -> Grafana
 ```
 
-The implementation is one Spring Boot service organized into event, pricing, billing, reconciliation, Kafka, and drill-down packages. PostgreSQL is the source of truth. Database uniqueness and stable billing IDs provide idempotency; Kafka exactly-once configuration is not used as the correctness guarantee.
+Meterline is one Spring Boot service organized into event, pricing, billing, reconciliation, Kafka, and drill-down packages. PostgreSQL is the source of truth. Database uniqueness protects ingestion, stable IDs protect billing reruns, and independent reconciliation checks issued invoices.
 
-## Main Technologies And Why
+## Technology Choices
 
-| Technology | Role in Meterline |
+| Technology | Purpose |
 |---|---|
-| Java 21 and Spring Boot | Typed backend domain, REST API, scheduled/command-line jobs, and Actuator. |
-| PostgreSQL | Transactional source of truth, unique constraints, aggregation, and traceability joins. |
-| Flyway | Versioned database migrations. |
-| Integer cents and scaled integer rates | Exact final money representation without floating-point money math. |
-| `BigDecimal` | Fractional-rate arithmetic with explicit rounding. |
-| Kafka | At-least-once ingestion and replay path. |
-| Testcontainers | Integration tests against real PostgreSQL and Kafka services. Requires Docker. |
-| jqwik | Property-based pricing checks in addition to example tests. |
-| Docker Compose and `kind` | Repeatable local services and local Kubernetes manifests. |
-| Micrometer, Prometheus, Grafana | Application metrics, scrape endpoint, and provisioned operations dashboard. |
+| Java 21, Spring Boot | Typed backend domain, REST API, jobs, and Actuator. |
+| PostgreSQL | Transactional source of truth, constraints, aggregation, and traceability joins. |
+| Flyway | Versioned schema migrations. |
+| Integer cents, scaled integer rates, `BigDecimal` | Exact monetary representation and controlled fractional-rate rounding. |
+| Kafka | At-least-once event publication, consumption, and replay. |
+| Testcontainers | Integration tests with real PostgreSQL and Kafka services; requires Docker. |
+| jqwik | Property-based pricing checks. |
+| Docker Compose, `kind` | Local multi-service runtime and Kubernetes manifests. |
+| Micrometer, Prometheus, Grafana | Application metrics, scraping, and operations dashboard. |
 
-## Run And Inspect
+## Run Locally
 
-Requirements: Java 21, Maven, and Docker Compose. Set local passwords in environment variables; the repository does not need committed passwords.
+Requirements: Java 21, Maven, and Docker Compose. Set local passwords in the shell; do not commit them.
 
 ```bash
 export METERLINE_POSTGRES_PASSWORD='<choose-a-local-password>'
@@ -106,9 +101,9 @@ export GRAFANA_ADMIN_PASSWORD='<choose-a-local-password>'
 docker compose up --build
 ```
 
-The app is at `http://localhost:8080`, Prometheus at `http://localhost:9090`, Grafana at `http://localhost:3000`, and the Prometheus metrics endpoint is `http://localhost:8080/actuator/prometheus`.
+The app is available at `http://localhost:8080`, Prometheus at `http://localhost:9090`, and Grafana at `http://localhost:3000`. Metrics are exposed at `http://localhost:8080/actuator/prometheus`.
 
-In another shell, submit an event:
+Submit a usage event:
 
 ```bash
 curl -i -X POST http://localhost:8080/api/events \
@@ -116,7 +111,7 @@ curl -i -X POST http://localhost:8080/api/events \
   -d '{"customerId":"cust-1","meterId":"api-calls","source":"demo","sourceEventKey":"request-123","quantityUnits":42,"eventTimestamp":"2026-01-01T00:00:00Z","eventType":"USAGE","metadata":{"path":"/v1/messages"}}'
 ```
 
-Run billing, issue the invoices, and inspect an invoice and its line. Replace the sample period and IDs with values from the database/API response:
+Run billing, issue invoices, inspect an invoice and line, then reconcile the period. Replace the sample period and IDs with the relevant values:
 
 ```bash
 mvn spring-boot:run --args="billing:run 2026-01-01T00:00:00Z 2026-02-01T00:00:00Z"
@@ -126,42 +121,53 @@ curl http://localhost:8080/api/invoice-lines/<line-id>/drilldown
 mvn spring-boot:run --args="reconcile:run 2026-01-01T00:00:00Z 2026-02-01T00:00:00Z --json"
 ```
 
-Run automated tests with:
+Run tests with:
 
 ```bash
 mvn test
 ```
 
-## Verification And Evidence
+PostgreSQL and Kafka integration tests use Testcontainers and require a running Docker engine. In the measured run, Maven 3.9.9 and Java 21 ran in a container connected to Docker Desktop because Maven was not available on the host command path.
 
-The final Docker-backed `mvn test` run completed with **34 tests, 0 failures, 0 errors, and 0 skipped**. PostgreSQL and Kafka Testcontainers both ran against Docker Desktop. The Testcontainers dependency is pinned to 1.21.4 for compatibility with the installed Docker Engine.
+## Verification And Benchmark Evidence
 
-The Kafka duplicate-replay scale test passed three times at 100,000 unique events per run, with 201,000 total deliveries, 101,000 rejected duplicates, zero duplicate units billed, an independently calculated 550,000-cent invoice total, and zero reconciliation mismatches. End-to-end ingestion including consumer drain took 74,700 ms, 72,051 ms, and 74,635 ms; billing took 166 ms, 162 ms, and 170 ms; reconciliation took 37 ms, 33 ms, and 28 ms. Machine: Apple M1 Pro MacBook Pro, 8 CPU cores, 16 GB RAM; Docker Desktop allocation: 8 CPUs and 7.748 GiB. Full run details are in [docs/final-test-summary.md](final-test-summary.md) and [docs/day-4-benchmark.md](day-4-benchmark.md).
+The full Docker-backed Maven run completed with:
 
-The 10-million figure refers to a single aggregate pricing calculation, not ten million stored events. Docker Compose Prometheus/Grafana connectivity and `kind` pod deletion/recovery were not measured. The crash-recovery test repairs partial invoice-line state and reruns billing; it does not kill a process at an arbitrary instruction inside a transaction.
+```text
+Tests run: 34, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
 
-## Known Limits
+This run exercised PostgreSQL and Kafka Testcontainers. Testcontainers is pinned to 1.21.4 for compatibility with Docker Engine 29.8.2.
 
-- One event schema and one currency.
-- The pricing engine supports volume and marginal tiered pricing; the active billing catalog currently selects a default volume plan.
-- Pricing tests cover mid-period effective rate changes, but selecting a customer-specific changing plan through the invoice workflow is not yet wired end to end.
-- The invoice schema persists applied rate but not a plan ID or explicit rate-version ID. Drill-down reports the rate and uses the invoice period start as the effective timestamp label.
-- No taxes, dunning, payment provider integration, multi-currency, React UI, Redis, or microservices.
+The Kafka duplicate-replay test ran three times. Each run generated 100,000 unique events across 20 customers, replayed the entire set once, and sent 1,000 additional duplicates concurrently from four producer threads. Each run delivered 201,000 messages, stored exactly 100,000 raw events, rejected 101,000 duplicates, billed zero duplicate units, produced an independently computed 550,000-cent invoice total, and reported zero reconciliation mismatches.
+
+| Run | Ingestion incl. consumer drain | Billing | Reconciliation |
+|---:|---:|---:|---:|
+| 1 | 74,700 ms | 166 ms | 37 ms |
+| 2 | 72,051 ms | 162 ms | 33 ms |
+| 3 | 74,635 ms | 170 ms | 28 ms |
+
+Measured machine: MacBook Pro with Apple M1 Pro, 8 CPU cores, and 16 GB RAM. Docker Desktop allocation: 8 CPUs and 7.748 GiB. These are local observations, not a production capacity claim.
+
+## Known Limits And Unverified Work
+
+- The replay benchmark is 100,000 unique stored events, not a 10-million-row load test. The 10-million figure elsewhere is an aggregate pricing arithmetic case.
+- Docker Compose Prometheus/Grafana connectivity and `kind` pod deletion/recovery were not measured.
+- Partial-state recovery removes missing invoice-line state and reruns billing; it does not kill a process at an arbitrary instruction inside a transaction.
+- The active billing catalog selects a default volume plan. Customer-specific effective-dated plan selection is not wired end to end.
+- Invoice lines persist the applied rate but not a plan ID or explicit rate-version ID. Drill-down labels the period start as the rate-version timestamp.
+- The project supports one event schema and one currency. It does not include taxes, dunning, payment-provider integration, a customer-facing React UI, Redis, or microservices.
 - Kafka consumer lag is not instrumented.
-- Docker Compose observability and `kind` recovery still need their own runtime verification; PostgreSQL/Kafka integration coverage passed with Docker Desktop in the recorded run.
 
 ## Related Documents
 
 - [README](../README.md)
 - [Architecture and technology decisions](architecture-and-decisions.md)
 - [Final test summary](final-test-summary.md)
-- [Day 4 benchmark notes](day-4-benchmark.md)
+- [Kafka replay benchmark results](day-4-benchmark.md)
 - [Reconciliation example](reconciliation-report-example.md)
-- [Drill-down example](drilldown-example.md)
+- [Invoice drill-down example](drilldown-example.md)
 - [Resume bullets](resume-bullets.md)
 - [Interview guide](interview-guide.md)
 - [Outreach message](outreach-message.md)
-
-## GitHub
-
-Day 5 was pushed to `main` in commit [`bc7448b`](https://github.com/sanjanasenthil/meterline/commit/bc7448bd0d791c852f7994ce8177aeb5386868bc). This overview document was created afterward and is currently a local workspace file.
